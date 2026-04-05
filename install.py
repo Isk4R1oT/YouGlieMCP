@@ -2,10 +2,12 @@
 """One-command installer for Yougile MCP Server.
 
 Usage:
-    uv run install.py
+    uv run install.py              # full install: API key + MCP + skills
+    uv run install.py --no-skills  # skip skills installation
 
-Handles API key setup + Claude Code MCP registration in one step.
+Handles API key setup + Claude Code MCP registration + skills in one step.
 """
+import argparse
 import getpass
 import json
 import os
@@ -143,7 +145,46 @@ def print_manual_instructions() -> None:
     print(f"\n  claude mcp add yougile -- uv --directory {project_dir} run yougile-mcp")
 
 
+def install_skills() -> None:
+    skills_src = Path(__file__).resolve().parent / "skills"
+    if not skills_src.exists():
+        print("\n  Skills directory not found, skipping.")
+        return
+
+    skills_dest = Path.home() / ".claude" / "skills"
+    skills_dest.mkdir(parents=True, exist_ok=True)
+
+    installed = []
+    for skill_dir in sorted(skills_src.iterdir()):
+        if not skill_dir.is_dir():
+            continue
+        skill_file = skill_dir / "SKILL.md"
+        if not skill_file.exists():
+            continue
+
+        dest = skills_dest / skill_dir.name
+        if dest.exists():
+            shutil.rmtree(dest)
+        shutil.copytree(skill_dir, dest)
+        installed.append(skill_dir.name)
+
+    if installed:
+        print(f"\n  Installed {len(installed)} skills to {skills_dest}:")
+        for name in installed:
+            print(f"    /{name}")
+    else:
+        print("\n  No skills found to install.")
+
+
 def main() -> None:
+    parser = argparse.ArgumentParser(description="Yougile MCP Server Installer")
+    parser.add_argument(
+        "--no-skills",
+        action="store_true",
+        help="Skip installing Claude Code skills",
+    )
+    args = parser.parse_args()
+
     print_header()
 
     existing_key = None
@@ -158,12 +199,16 @@ def main() -> None:
         reuse = input("  Use existing key? [Y/n]: ").strip().lower()
         if reuse not in ("n", "no"):
             register_claude_mcp()
+            if not args.no_skills:
+                install_skills()
             print("\n  Done! Restart Claude Code to use Yougile tools.\n")
             return
 
     api_key = get_api_key_interactive()
     save_key(api_key)
     register_claude_mcp()
+    if not args.no_skills:
+        install_skills()
     print("\n  Done! Restart Claude Code to use Yougile tools.\n")
 
 

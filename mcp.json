@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "yougile": {
+      "command": "uvx",
+      "args": ["--from", "git+https://github.com/Isk4R1oT/YouGlieMCP", "yougile-mcp"]
+    }
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "name": "yougile",
+  "version": "0.1.0",
+  "description": "Yougile project management tools and skills for Claude Code",
+  "author": {
+    "name": "Isk4R1oT",
+    "url": "https://github.com/Isk4R1oT"
+  },
+  "repository": "https://github.com/Isk4R1oT/YouGlieMCP",
+  "license": "MIT",
+  "keywords": ["yougile", "project-management", "mcp", "tasks"],
+  "skills": "./skills/",
+  "mcpServers": "./mcp.json"
+}

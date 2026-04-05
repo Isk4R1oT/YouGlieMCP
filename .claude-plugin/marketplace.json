@@ -1,0 +1,12 @@
+{
+  "name": "yougile-mcp",
+  "description": "Yougile project management plugin for Claude Code",
+  "plugins": [
+    {
+      "name": "yougile",
+      "source": ".",
+      "version": "0.1.0",
+      "description": "Yougile MCP server with task management skills"
+    }
+  ]
+}
