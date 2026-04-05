@@ -20,12 +20,12 @@ One line — no cloning needed:
 
 **With API key:**
 ```bash
-claude mcp add yougile -e YOUGILE_API_KEY=your-key -- uvx --from git+https://github.com/igorpronin/YouGlieMCP yougile-mcp
+claude mcp add yougile -e YOUGILE_API_KEY=your-key -- uvx --from git+https://github.com/Isk4R1oT/YouGlieMCP yougile-mcp
 ```
 
 **With login/password** (API key will be created automatically):
 ```bash
-claude mcp add yougile -e YOUGILE_LOGIN=email -e YOUGILE_PASSWORD=pass -- uvx --from git+https://github.com/igorpronin/YouGlieMCP yougile-mcp
+claude mcp add yougile -e YOUGILE_LOGIN=email -e YOUGILE_PASSWORD=pass -- uvx --from git+https://github.com/Isk4R1oT/YouGlieMCP yougile-mcp
 ```
 
 Restart Claude Code and the Yougile tools are ready.
