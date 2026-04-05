@@ -14,39 +14,23 @@ All tools accept **human-readable names** (project names, board names, user emai
 - **Users** — list company users with online status
 - **Stickers** — manage custom labels (e.g. Priority: High, Type: Bug)
 
-## Installation
+## Install in Claude Code
 
-### One-command setup
+One line — no cloning needed:
 
+**With API key:**
 ```bash
-uv run install.py
+claude mcp add yougile -e YOUGILE_API_KEY=your-key -- uvx --from git+https://github.com/igorpronin/YouGlieMCP yougile-mcp
 ```
 
-This handles API key creation and registers the MCP server with Claude Code.
+**With login/password** (API key will be created automatically):
+```bash
+claude mcp add yougile -e YOUGILE_LOGIN=email -e YOUGILE_PASSWORD=pass -- uvx --from git+https://github.com/igorpronin/YouGlieMCP yougile-mcp
+```
 
-### Manual setup
+Restart Claude Code and the Yougile tools are ready.
 
-1. **Get an API key** (choose one):
-   - Run `uv run yougile-mcp setup` for interactive setup
-   - Or set `YOUGILE_API_KEY` environment variable
-   - Or set `YOUGILE_LOGIN` + `YOUGILE_PASSWORD` (key will be created automatically)
-
-2. **Register with Claude Code:**
-   ```bash
-   claude mcp add yougile -- uv --directory /path/to/YouGlieMCP run yougile-mcp
-   ```
-
-3. **Restart Claude Code** to pick up the new MCP server.
-
-## Authentication
-
-API key is resolved in priority order:
-
-1. `YOUGILE_API_KEY` environment variable
-2. `~/.config/yougile-mcp/config.json` (created by setup)
-3. `YOUGILE_LOGIN` + `YOUGILE_PASSWORD` environment variables (auto-creates and saves key)
-
-Optionally set `YOUGILE_COMPANY` to select a specific company when using login/password auth.
+> Set `-e YOUGILE_COMPANY=name` if your account has multiple companies.
 
 ## Requirements
 
