@@ -22,12 +22,6 @@ build/
 .DS_Store
 Thumbs.db
 
-# Config with secrets
-~/.config/yougile-mcp/
-
-# uv
-uv.lock
-
 # Claude Code
 .claude/
 CLAUDE.md
