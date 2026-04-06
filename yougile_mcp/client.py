@@ -1,6 +1,6 @@
 import asyncio
 import logging
-import os
+import time
 from typing import Any
 
 import httpx
@@ -15,14 +15,30 @@ TIMEOUT = 30.0
 MAX_RETRIES = 3
 RETRY_BACKOFF = 1.0
 PAGE_LIMIT = 1000
+CACHE_TTL = 30.0
 
 
 class YougileClient:
-    """HTTP client for Yougile API v2 with retry, pagination, and auth."""
+    """HTTP client for Yougile API v2 with retry, pagination, auth, and TTL cache."""
 
     def __init__(self) -> None:
         self._api_key: str | None = None
         self._http: httpx.AsyncClient | None = None
+        self._cache: dict[str, tuple[float, Any]] = {}
+
+    def _cache_get(self, key: str) -> Any | None:
+        """Return cached value if not expired, else None."""
+        entry = self._cache.get(key)
+        if entry is None:
+            return None
+        ts, data = entry
+        if time.monotonic() - ts > CACHE_TTL:
+            del self._cache[key]
+            return None
+        return data
+
+    def _cache_set(self, key: str, data: Any) -> None:
+        self._cache[key] = (time.monotonic(), data)
 
     def _ensure_api_key(self) -> str:
         if self._api_key is None:
@@ -165,10 +181,23 @@ class YougileClient:
         params: dict[str, Any] = {}
         if title is not None:
             params["title"] = title
+        if not params:
+            cached = self._cache_get("projects")
+            if cached is not None:
+                return cached
+            result = await self.paginate("/projects", params)
+            self._cache_set("projects", result)
+            return result
         return await self.paginate("/projects", params)
 
     async def get_project(self, project_id: str) -> dict[str, Any]:
-        return await self.get(f"/projects/{project_id}", None)
+        cache_key = f"project:{project_id}"
+        cached = self._cache_get(cache_key)
+        if cached is not None:
+            return cached
+        result = await self.get(f"/projects/{project_id}", None)
+        self._cache_set(cache_key, result)
+        return result
 
     async def get_boards(
         self,
@@ -180,10 +209,24 @@ class YougileClient:
             params["projectId"] = project_id
         if title is not None:
             params["title"] = title
+        if title is None and project_id is not None:
+            cache_key = f"boards:{project_id}"
+            cached = self._cache_get(cache_key)
+            if cached is not None:
+                return cached
+            result = await self.paginate("/boards", params)
+            self._cache_set(cache_key, result)
+            return result
         return await self.paginate("/boards", params)
 
     async def get_board(self, board_id: str) -> dict[str, Any]:
-        return await self.get(f"/boards/{board_id}", None)
+        cache_key = f"board:{board_id}"
+        cached = self._cache_get(cache_key)
+        if cached is not None:
+            return cached
+        result = await self.get(f"/boards/{board_id}", None)
+        self._cache_set(cache_key, result)
+        return result
 
     async def create_board(
         self,
@@ -205,7 +248,13 @@ class YougileClient:
         return await self.paginate("/columns", params)
 
     async def get_column(self, column_id: str) -> dict[str, Any]:
-        return await self.get(f"/columns/{column_id}", None)
+        cache_key = f"column:{column_id}"
+        cached = self._cache_get(cache_key)
+        if cached is not None:
+            return cached
+        result = await self.get(f"/columns/{column_id}", None)
+        self._cache_set(cache_key, result)
+        return result
 
     async def create_column(
         self,
@@ -260,6 +309,13 @@ class YougileClient:
             params["email"] = email
         if project_id is not None:
             params["projectId"] = project_id
+        if not params:
+            cached = self._cache_get("users")
+            if cached is not None:
+                return cached
+            result = await self.paginate("/users", params)
+            self._cache_set("users", result)
+            return result
         return await self.paginate("/users", params)
 
     async def get_user(self, user_id: str) -> dict[str, Any]:
@@ -275,6 +331,13 @@ class YougileClient:
             params["boardId"] = board_id
         if name is not None:
             params["name"] = name
+        if not params:
+            cached = self._cache_get("stickers")
+            if cached is not None:
+                return cached
+            result = await self.paginate("/string-stickers", params)
+            self._cache_set("stickers", result)
+            return result
         return await self.paginate("/string-stickers", params)
 
     async def get_string_sticker(self, sticker_id: str) -> dict[str, Any]:

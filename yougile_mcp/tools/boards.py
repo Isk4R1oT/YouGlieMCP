@@ -1,6 +1,8 @@
-from typing import Any
+import asyncio
+from typing import Annotated, Any
 
 from fastmcp import FastMCP
+from pydantic import Field
 
 from yougile_mcp.client import YougileClient
 from yougile_mcp.resolvers import resolve_board, resolve_project
@@ -11,22 +13,26 @@ KANBAN_COLUMNS = ["Backlog", "To Do", "In Progress", "Review", "Done"]
 
 def register(mcp: FastMCP, client: YougileClient) -> None:
 
-    @mcp.tool
+    @mcp.tool(
+        annotations={"readOnlyHint": False},
+        tags={"boards", "write"},
+    )
     async def create_board(
-        project: str,
-        board_name: str,
-        columns: list[str] | None = None,
+        project: Annotated[str, Field(description="Project name")],
+        board_name: Annotated[
+            str, Field(description="New board name", min_length=1)
+        ],
+        columns: Annotated[
+            list[str] | None,
+            Field(description="Column names to create"),
+        ] = None,
     ) -> dict[str, Any]:
-        """Create a new board in a project, optionally with columns in one call.
+        """Create a board in a project, optionally with columns.
 
         Examples:
-          - create_board(project="Marketing", board_name="Q1 Campaign", columns=["Ideas", "In Progress", "Done"])
-          - create_board(project="Dev", board_name="Bugs") — no columns
-
-        Args:
-            project: Project name.
-            board_name: Name for the new board.
-            columns: Optional list of column names to create in the board.
+          - create_board(project="Marketing",
+              board_name="Q1", columns=["Ideas", "Done"])
+          - create_board(project="Dev", board_name="Bugs")
         """
         project_id = await resolve_project(client, project)
         board_result = await client.create_board(board_name, project_id)
@@ -45,16 +51,19 @@ def register(mcp: FastMCP, client: YougileClient) -> None:
             "columns": created_columns,
         }
 
-    @mcp.tool
+    @mcp.tool(
+        annotations={"readOnlyHint": False},
+        tags={"boards", "write"},
+    )
     async def setup_kanban_board(
-        project: str,
-        board_name: str,
+        project: Annotated[str, Field(description="Project name")],
+        board_name: Annotated[
+            str, Field(description="New board name", min_length=1)
+        ],
     ) -> dict[str, Any]:
-        """Create a board with standard Kanban columns: Backlog, To Do, In Progress, Review, Done.
+        """Create a board with standard Kanban columns.
 
-        Args:
-            project: Project name.
-            board_name: Name for the new board.
+        Columns: Backlog, To Do, In Progress, Review, Done.
         """
         project_id = await resolve_project(client, project)
         board_result = await client.create_board(board_name, project_id)
@@ -72,33 +81,39 @@ def register(mcp: FastMCP, client: YougileClient) -> None:
             "columns": created_columns,
         }
 
-    @mcp.tool
+    @mcp.tool(
+        annotations={"readOnlyHint": True, "idempotentHint": True},
+        tags={"boards", "read"},
+    )
     async def get_board_details(
-        project: str,
-        board: str,
+        project: Annotated[str, Field(description="Project name")],
+        board: Annotated[str, Field(description="Board name within the project")],
     ) -> dict[str, Any]:
-        """Get all columns and their tasks for a specific board.
+        """Get all columns and their tasks for a board.
 
-        Returns the board structure with each column's tasks including title, assignees, and completion status.
-
-        Args:
-            project: Project name.
-            board: Board name within the project.
+        Returns columns with tasks including title,
+        assignees, and completion status.
+        Call 'list_projects' first to discover names.
         """
         project_id = await resolve_project(client, project)
         board_id = await resolve_board(client, project_id, board)
-        board_data = await client.get_board(board_id)
-        columns = await client.get_columns(board_id, None)
 
-        # Build user map for name resolution
-        all_users = await client.get_users(None, None)
+        board_data, columns, all_users = await asyncio.gather(
+            client.get_board(board_id),
+            client.get_columns(board_id, None),
+            client.get_users(None, None),
+        )
+
         user_map = {u["id"]: u for u in all_users}
+        active_columns = [c for c in columns if not c.get("deleted", False)]
+
+        task_lists = await asyncio.gather(*[
+            client.get_tasks(col["id"], None, None, None)
+            for col in active_columns
+        ])
 
         col_details = []
-        for col in columns:
-            if col.get("deleted", False):
-                continue
-            tasks = await client.get_tasks(col["id"], None, None, None)
+        for col, tasks in zip(active_columns, task_lists):
             task_summaries = []
             for t in tasks:
                 if t.get("deleted", False):
@@ -110,7 +125,10 @@ def register(mcp: FastMCP, client: YougileClient) -> None:
                 task_summaries.append({
                     "id": t.get("id", ""),
                     "title": t.get("title", ""),
-                    "task_code": t.get("idTaskCommon", "") or t.get("idTaskProject", ""),
+                    "task_code": (
+                        t.get("idTaskCommon", "")
+                        or t.get("idTaskProject", "")
+                    ),
                     "assigned": assigned_names,
                     "completed": t.get("completed", False),
                     "color": t.get("color", ""),

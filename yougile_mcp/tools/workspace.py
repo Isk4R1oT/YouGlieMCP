@@ -1,6 +1,8 @@
-from typing import Any
+import asyncio
+from typing import Annotated, Any
 
 from fastmcp import FastMCP
+from pydantic import Field
 
 from yougile_mcp.client import YougileClient
 from yougile_mcp.resolvers import resolve_project
@@ -8,19 +10,25 @@ from yougile_mcp.resolvers import resolve_project
 
 def register(mcp: FastMCP, client: YougileClient) -> None:
 
-    @mcp.tool
+    @mcp.tool(
+        annotations={"readOnlyHint": True, "idempotentHint": True},
+        tags={"workspace", "read"},
+    )
     async def list_projects() -> list[dict[str, Any]]:
         """List all projects in the company with their boards.
 
         Returns a list of projects, each containing its boards with IDs and names.
-        Use this to discover the workspace structure before working with tasks.
+        Call this first to discover the workspace structure before working with tasks.
         """
         projects = await client.get_projects(None)
+        active_projects = [p for p in projects if not p.get("deleted", False)]
+
+        board_lists = await asyncio.gather(*[
+            client.get_boards(p["id"], None) for p in active_projects
+        ])
+
         result = []
-        for project in projects:
-            if project.get("deleted", False):
-                continue
-            boards = await client.get_boards(project["id"], None)
+        for project, boards in zip(active_projects, board_lists):
             result.append({
                 "id": project["id"],
                 "name": project.get("title", ""),
@@ -32,35 +40,62 @@ def register(mcp: FastMCP, client: YougileClient) -> None:
             })
         return result
 
-    @mcp.tool
-    async def get_project_overview(project: str) -> dict[str, Any]:
-        """Get a detailed overview of a project: all boards, their columns, and task counts per column.
+    @mcp.tool(
+        annotations={"readOnlyHint": True, "idempotentHint": True},
+        tags={"workspace", "read"},
+    )
+    async def get_project_overview(
+        project: Annotated[
+            str,
+            Field(description="Project name (case-insensitive)"),
+        ],
+    ) -> dict[str, Any]:
+        """Get a project overview: boards, columns, task counts.
 
-        Use this to understand the full structure and workload distribution of a project.
-
-        Args:
-            project: Project name (case-insensitive, substring match).
+        Shows structure and workload distribution.
         """
         project_id = await resolve_project(client, project)
-        project_data = await client.get_project(project_id)
-        boards = await client.get_boards(project_id, None)
+        project_data, boards = await asyncio.gather(
+            client.get_project(project_id),
+            client.get_boards(project_id, None),
+        )
 
-        board_details = []
+        active_boards = [b for b in boards if not b.get("deleted", False)]
+
+        col_lists = await asyncio.gather(*[
+            client.get_columns(b["id"], None) for b in active_boards
+        ])
+
+        # Gather task counts for all columns in parallel
+        all_active_cols: list[
+            tuple[dict[str, Any], dict[str, Any]]
+        ] = []
+        for board, cols in zip(active_boards, col_lists):
+            for col in cols:
+                if not col.get("deleted", False):
+                    all_active_cols.append((board, col))
+
+        count_results = await asyncio.gather(*[
+            client.get(
+                "/task-list",
+                {"columnId": col["id"], "limit": 1, "offset": 0},
+            )
+            for _, col in all_active_cols
+        ])
+
+        # Build column counts map
+        col_counts: dict[str, int] = {}
+        for (_, col), count_data in zip(all_active_cols, count_results):
+            col_counts[col["id"]] = count_data.get("paging", {}).get("count", 0)
+
         total_tasks = 0
-        for board in boards:
-            if board.get("deleted", False):
-                continue
-            columns = await client.get_columns(board["id"], None)
+        board_details = []
+        for board, cols in zip(active_boards, col_lists):
             col_details = []
-            for col in columns:
+            for col in cols:
                 if col.get("deleted", False):
                     continue
-                tasks = await client.get_tasks(col["id"], None, None, 0)
-                # limit=0 trick doesn't work, use paging count
-                tasks_data = await client.get("/task-list", {
-                    "columnId": col["id"], "limit": 1, "offset": 0,
-                })
-                count = tasks_data.get("paging", {}).get("count", 0)
+                count = col_counts.get(col["id"], 0)
                 total_tasks += count
                 col_details.append({
                     "name": col.get("title", ""),

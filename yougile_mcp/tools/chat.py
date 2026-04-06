@@ -1,6 +1,7 @@
-from typing import Any
+from typing import Annotated, Any
 
 from fastmcp import FastMCP
+from pydantic import Field
 
 from yougile_mcp.client import YougileClient
 from yougile_mcp.resolvers import resolve_task
@@ -8,17 +9,20 @@ from yougile_mcp.resolvers import resolve_task
 
 def register(mcp: FastMCP, client: YougileClient) -> None:
 
-    @mcp.tool
+    @mcp.tool(
+        annotations={"readOnlyHint": True, "idempotentHint": True},
+        tags={"chat", "read"},
+    )
     async def get_task_comments(
-        task: str,
-        limit: int | None = None,
+        task: Annotated[
+            str, Field(description="Task code or UUID")
+        ],
+        limit: Annotated[
+            int | None,
+            Field(description="Max messages to return", ge=1),
+        ] = None,
     ) -> dict[str, Any]:
-        """Get all chat messages/comments on a task with resolved author names.
-
-        Args:
-            task: Task code (e.g. 'PRJ-123') or task UUID.
-            limit: Maximum number of messages to return. Omit for all messages.
-        """
+        """Get chat messages on a task with author names."""
         task_data = await resolve_task(client, task)
         task_id = task_data["id"]
 
@@ -45,22 +49,27 @@ def register(mcp: FastMCP, client: YougileClient) -> None:
 
         return {
             "task": task_data.get("title", task),
-            "task_code": task_data.get("idTaskCommon", "") or task_data.get("idTaskProject", ""),
+            "task_code": (
+                task_data.get("idTaskCommon", "")
+                or task_data.get("idTaskProject", "")
+            ),
             "message_count": len(enriched_messages),
             "messages": enriched_messages,
         }
 
-    @mcp.tool
+    @mcp.tool(
+        annotations={"readOnlyHint": False},
+        tags={"chat", "write"},
+    )
     async def add_task_comment(
-        task: str,
-        text: str,
+        task: Annotated[
+            str, Field(description="Task code or UUID")
+        ],
+        text: Annotated[
+            str, Field(description="Message text", min_length=1)
+        ],
     ) -> dict[str, Any]:
-        """Post a comment/message on a task's chat.
-
-        Args:
-            task: Task code (e.g. 'PRJ-123') or task UUID.
-            text: Message text to post.
-        """
+        """Post a comment/message on a task's chat."""
         task_data = await resolve_task(client, task)
         task_id = task_data["id"]
 

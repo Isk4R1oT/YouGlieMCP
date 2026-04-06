@@ -1,7 +1,10 @@
-from typing import Any
+import asyncio
+import datetime
+from typing import Annotated, Any, Literal
 
 from fastmcp import FastMCP
 from fastmcp.exceptions import ToolError
+from pydantic import Field
 
 from yougile_mcp.client import YougileClient
 from yougile_mcp.resolvers import (
@@ -15,35 +18,47 @@ from yougile_mcp.resolvers import (
     resolve_users,
 )
 
+VALID_COLORS = Literal[
+    "task-primary", "task-gray", "task-red", "task-pink",
+    "task-yellow", "task-green", "task-turquoise",
+    "task-blue", "task-violet",
+]
+
 
 def register(mcp: FastMCP, client: YougileClient) -> None:
 
-    @mcp.tool
+    @mcp.tool(
+        annotations={"readOnlyHint": False},
+        tags={"tasks", "write"},
+    )
     async def create_task(
-        title: str,
-        project: str,
-        board: str,
-        column: str,
-        description: str | None = None,
-        assigned: list[str] | None = None,
-        deadline: str | None = None,
-        color: str | None = None,
+        title: Annotated[str, Field(description="Task title", min_length=1)],
+        project: Annotated[str, Field(description="Project name")],
+        board: Annotated[str, Field(description="Board name within the project")],
+        column: Annotated[str, Field(description="Column name within the board")],
+        description: Annotated[
+            str | None,
+            Field(description="Task description (HTML ok)"),
+        ] = None,
+        assigned: Annotated[
+            list[str] | None,
+            Field(description="User names or emails to assign"),
+        ] = None,
+        deadline: Annotated[
+            str | None,
+            Field(description="Deadline: YYYY-MM-DD or ISO"),
+        ] = None,
+        color: Annotated[VALID_COLORS | None, Field(description="Task color")] = None,
     ) -> dict[str, Any]:
-        """Create a task in a specific column. Resolves project, board, column, and users by name.
+        """Create a task in a specific column.
+
+        Resolves project, board, column, and users by name.
 
         Examples:
-          - create_task(title="Draft copy", project="Marketing", board="Q1", column="To Do")
-          - create_task(title="Fix bug", project="Dev", board="Sprint 1", column="Backlog", assigned=["igor@example.com"])
-
-        Args:
-            title: Task title.
-            project: Project name.
-            board: Board name within the project.
-            column: Column name within the board.
-            description: Optional task description (supports HTML).
-            assigned: Optional list of user names or emails to assign.
-            deadline: Optional deadline in ISO format (YYYY-MM-DD or YYYY-MM-DDTHH:MM:SS).
-            color: Optional task color. One of: task-primary, task-gray, task-red, task-pink, task-yellow, task-green, task-turquoise, task-blue, task-violet.
+          - create_task(title="Draft copy",
+              project="Marketing", board="Q1", column="To Do")
+          - create_task(title="Fix bug", project="Dev",
+              board="Sprint 1", column="Backlog")
         """
         project_id = await resolve_project(client, project)
         board_id = await resolve_board(client, project_id, board)
@@ -65,16 +80,6 @@ def register(mcp: FastMCP, client: YougileClient) -> None:
             body["deadline"] = _parse_deadline(deadline)
 
         if color is not None:
-            valid_colors = [
-                "task-primary", "task-gray", "task-red", "task-pink",
-                "task-yellow", "task-green", "task-turquoise",
-                "task-blue", "task-violet",
-            ]
-            if color not in valid_colors:
-                raise ToolError(
-                    f"Invalid color '{color}'. "
-                    f"Valid colors: {', '.join(valid_colors)}"
-                )
             body["color"] = color
 
         result = await client.create_task(body)
@@ -88,35 +93,47 @@ def register(mcp: FastMCP, client: YougileClient) -> None:
             "status": "created",
         }
 
-    @mcp.tool
-    async def get_task(task: str) -> dict[str, Any]:
-        """Get full details of a task with resolved names for column, board, project, assignees, and stickers.
-
-        Args:
-            task: Task code (e.g. 'PRJ-123') or task UUID.
-        """
+    @mcp.tool(
+        annotations={"readOnlyHint": True, "idempotentHint": True},
+        tags={"tasks", "read"},
+    )
+    async def get_task(
+        task: Annotated[
+            str, Field(description="Task code or UUID")
+        ],
+    ) -> dict[str, Any]:
+        """Get full task details with resolved names."""
         task_data = await resolve_task(client, task)
         return await enrich_task(client, task_data)
 
-    @mcp.tool
+    @mcp.tool(
+        annotations={"readOnlyHint": False},
+        tags={"tasks", "write"},
+    )
     async def update_task(
-        task: str,
-        title: str | None = None,
-        description: str | None = None,
-        deadline: str | None = None,
-        color: str | None = None,
+        task: Annotated[
+            str, Field(description="Task code or UUID")
+        ],
+        title: Annotated[
+            str | None, Field(description="New title")
+        ] = None,
+        description: Annotated[
+            str | None,
+            Field(description="New description (HTML ok)"),
+        ] = None,
+        deadline: Annotated[
+            str | None,
+            Field(description="YYYY-MM-DD or 'remove' to clear"),
+        ] = None,
+        color: Annotated[
+            VALID_COLORS | None,
+            Field(description="New task color"),
+        ] = None,
     ) -> dict[str, Any]:
-        """Update task properties: title, description, deadline, or color.
+        """Update task: title, description, deadline, or color.
 
         Use 'move_task' to change column, 'assign_task' to change assignees,
         'complete_task'/'archive_task' for status changes.
-
-        Args:
-            task: Task code (e.g. 'PRJ-123') or task UUID.
-            title: New title.
-            description: New description (supports HTML).
-            deadline: New deadline in ISO format (YYYY-MM-DD). Pass 'remove' to clear deadline.
-            color: New color. One of: task-primary, task-gray, task-red, task-pink, task-yellow, task-green, task-turquoise, task-blue, task-violet.
         """
         task_data = await resolve_task(client, task)
         body: dict[str, Any] = {}
@@ -148,26 +165,34 @@ def register(mcp: FastMCP, client: YougileClient) -> None:
             "status": "updated",
         }
 
-    @mcp.tool
+    @mcp.tool(
+        annotations={"readOnlyHint": False},
+        tags={"tasks", "write"},
+    )
     async def move_task(
-        task: str,
-        column: str,
-        board: str | None = None,
-        project: str | None = None,
+        task: Annotated[
+            str, Field(description="Task code or UUID")
+        ],
+        column: Annotated[
+            str, Field(description="Target column name")
+        ],
+        board: Annotated[
+            str | None,
+            Field(description="Target board (omit to keep current)"),
+        ] = None,
+        project: Annotated[
+            str | None,
+            Field(description="Target project (omit to keep current)"),
+        ] = None,
     ) -> dict[str, Any]:
-        """Move a task to a different column, optionally in a different board/project.
+        """Move a task to a different column.
 
-        If board/project are omitted, moves within the task's current board.
+        Optionally move to a different board/project.
 
         Examples:
-          - move_task(task="PRJ-123", column="Done") — move within current board
-          - move_task(task="PRJ-123", column="Backlog", board="Sprint 2") — move to another board
-
-        Args:
-            task: Task code (e.g. 'PRJ-123') or task UUID.
-            column: Target column name.
-            board: Target board name (omit to stay in current board).
-            project: Target project name (omit to stay in current project).
+          - move_task(task="PRJ-123", column="Done")
+          - move_task(task="PRJ-123", column="Backlog",
+              board="Sprint 2")
         """
         task_data = await resolve_task(client, task)
 
@@ -199,19 +224,24 @@ def register(mcp: FastMCP, client: YougileClient) -> None:
             "status": "moved",
         }
 
-    @mcp.tool
+    @mcp.tool(
+        annotations={"readOnlyHint": False},
+        tags={"tasks", "write"},
+    )
     async def assign_task(
-        task: str,
-        assign: list[str] | None = None,
-        unassign: list[str] | None = None,
+        task: Annotated[
+            str, Field(description="Task code or UUID")
+        ],
+        assign: Annotated[
+            list[str] | None,
+            Field(description="Users to add as assignees"),
+        ] = None,
+        unassign: Annotated[
+            list[str] | None,
+            Field(description="Users to remove from assignees"),
+        ] = None,
     ) -> dict[str, Any]:
-        """Assign or unassign users to/from a task. Resolves user names or emails.
-
-        Args:
-            task: Task code (e.g. 'PRJ-123') or task UUID.
-            assign: List of user names or emails to add as assignees.
-            unassign: List of user names or emails to remove from assignees.
-        """
+        """Assign or unassign users on a task."""
         if assign is None and unassign is None:
             raise ToolError(
                 "Provide at least one of 'assign' or 'unassign' lists."
@@ -247,17 +277,20 @@ def register(mcp: FastMCP, client: YougileClient) -> None:
             "status": "updated",
         }
 
-    @mcp.tool
+    @mcp.tool(
+        annotations={"readOnlyHint": False},
+        tags={"tasks", "write"},
+    )
     async def complete_task(
-        task: str,
-        completed: bool,
+        task: Annotated[
+            str, Field(description="Task code or UUID")
+        ],
+        completed: Annotated[
+            bool,
+            Field(description="True to complete, False to reopen"),
+        ],
     ) -> dict[str, Any]:
-        """Mark a task as completed or reopen it.
-
-        Args:
-            task: Task code (e.g. 'PRJ-123') or task UUID.
-            completed: True to complete, False to reopen.
-        """
+        """Mark a task as completed or reopen it."""
         task_data = await resolve_task(client, task)
         await client.update_task(task_data["id"], {"completed": completed})
         action = "completed" if completed else "reopened"
@@ -266,17 +299,20 @@ def register(mcp: FastMCP, client: YougileClient) -> None:
             "status": action,
         }
 
-    @mcp.tool
+    @mcp.tool(
+        annotations={"readOnlyHint": False, "destructiveHint": True},
+        tags={"tasks", "write"},
+    )
     async def archive_task(
-        task: str,
-        archived: bool,
+        task: Annotated[
+            str, Field(description="Task code or UUID")
+        ],
+        archived: Annotated[
+            bool,
+            Field(description="True to archive, False to restore"),
+        ],
     ) -> dict[str, Any]:
-        """Archive a task or restore it from archive.
-
-        Args:
-            task: Task code (e.g. 'PRJ-123') or task UUID.
-            archived: True to archive, False to restore.
-        """
+        """Archive a task or restore it from archive."""
         task_data = await resolve_task(client, task)
         await client.update_task(task_data["id"], {"archived": archived})
         action = "archived" if archived else "restored"
@@ -285,36 +321,57 @@ def register(mcp: FastMCP, client: YougileClient) -> None:
             "status": action,
         }
 
-    @mcp.tool
+    @mcp.tool(
+        annotations={"readOnlyHint": False},
+        tags={"tasks", "write"},
+    )
     async def manage_checklist(
-        task: str,
-        add_items: list[str] | None = None,
-        check_items: list[str] | None = None,
-        uncheck_items: list[str] | None = None,
-        remove_items: list[str] | None = None,
-        checklist_title: str | None = None,
+        task: Annotated[
+            str, Field(description="Task code or UUID")
+        ],
+        add_items: Annotated[
+            list[str] | None,
+            Field(description="Item texts to add"),
+        ] = None,
+        check_items: Annotated[
+            list[str] | None,
+            Field(description="Item texts to mark completed"),
+        ] = None,
+        uncheck_items: Annotated[
+            list[str] | None,
+            Field(description="Item texts to uncheck"),
+        ] = None,
+        remove_items: Annotated[
+            list[str] | None,
+            Field(description="Item texts to remove"),
+        ] = None,
+        checklist_title: Annotated[
+            str | None,
+            Field(description="Checklist title (default: 'Checklist')"),
+        ] = None,
     ) -> dict[str, Any]:
         """Add, check, uncheck, or remove checklist items on a task.
 
         If no checklist exists, one will be created. Items are matched by title text.
 
-        Args:
-            task: Task code (e.g. 'PRJ-123') or task UUID.
-            add_items: List of item texts to add to the checklist.
-            check_items: List of item texts to mark as completed.
-            uncheck_items: List of item texts to mark as not completed.
-            remove_items: List of item texts to remove.
-            checklist_title: Title for the checklist (defaults to 'Checklist').
+        Examples:
+          - manage_checklist(task="PRJ-123", add_items=["Write tests", "Update docs"])
+          - manage_checklist(task="PRJ-123", check_items=["Write tests"])
         """
-        if all(x is None for x in [add_items, check_items, uncheck_items, remove_items]):
+        actions = [add_items, check_items, uncheck_items, remove_items]
+        if all(x is None for x in actions):
             raise ToolError(
-                "Provide at least one of: add_items, check_items, uncheck_items, remove_items."
+                "Provide at least one of: add_items,"
+                " check_items, uncheck_items, remove_items."
             )
 
         task_data = await resolve_task(client, task)
         checklists = task_data.get("checklists", [])
 
-        effective_title = checklist_title if checklist_title is not None else "Checklist"
+        effective_title = (
+            checklist_title if checklist_title is not None
+            else "Checklist"
+        )
 
         # Find or create target checklist
         target = None
@@ -366,32 +423,50 @@ def register(mcp: FastMCP, client: YougileClient) -> None:
             "status": "updated",
         }
 
-    @mcp.tool
+    @mcp.tool(
+        annotations={"readOnlyHint": True, "idempotentHint": True},
+        tags={"tasks", "read"},
+    )
     async def search_tasks(
-        title: str | None = None,
-        assigned_to: str | None = None,
-        project: str | None = None,
-        board: str | None = None,
-        column: str | None = None,
-        completed: bool | None = None,
-        limit: int | None = None,
+        title: Annotated[
+            str | None,
+            Field(description="Search by title substring"),
+        ] = None,
+        assigned_to: Annotated[
+            str | None,
+            Field(description="Filter by user name or email"),
+        ] = None,
+        project: Annotated[
+            str | None,
+            Field(description="Filter by project name"),
+        ] = None,
+        board: Annotated[
+            str | None,
+            Field(description="Filter by board (needs project)"),
+        ] = None,
+        column: Annotated[
+            str | None,
+            Field(description="Filter by column (needs board)"),
+        ] = None,
+        completed: Annotated[
+            bool | None,
+            Field(description="Filter by completion status"),
+        ] = None,
+        limit: Annotated[
+            int | None,
+            Field(description="Max results", ge=1, le=200),
+        ] = None,
     ) -> dict[str, Any]:
-        """Search for tasks by title, assignee, column, board, or project.
+        """Search tasks by title, assignee, column, board, or project.
 
-        At least one filter must be provided. Results include resolved column and assignee names.
-
-        Args:
-            title: Search by title substring.
-            assigned_to: Filter by user name or email.
-            project: Filter by project name.
-            board: Filter by board name (requires project).
-            column: Filter by column name (requires project and board).
-            completed: Filter by completion status.
-            limit: Maximum results (default 50).
+        At least one filter required. Use 'get_user_tasks'
+        for a user's full task overview grouped by column.
         """
-        if all(x is None for x in [title, assigned_to, project, board, column]):
+        filters = [title, assigned_to, project, board, column]
+        if all(x is None for x in filters):
             raise ToolError(
-                "Provide at least one search filter: title, assigned_to, project, board, or column."
+                "Provide at least one filter: title,"
+                " assigned_to, project, board, or column."
             )
 
         effective_limit = limit if limit is not None else 50
@@ -403,7 +478,7 @@ def register(mcp: FastMCP, client: YougileClient) -> None:
         if column is not None:
             if board is None or project is None:
                 raise ToolError(
-                    "When filtering by column, you must also specify 'board' and 'project'."
+                    "Column filter requires 'board' and 'project'."
                 )
             project_id = await resolve_project(client, project)
             board_id = await resolve_board(client, project_id, board)
@@ -411,48 +486,44 @@ def register(mcp: FastMCP, client: YougileClient) -> None:
         elif board is not None:
             if project is None:
                 raise ToolError(
-                    "When filtering by board, you must also specify 'project'."
+                    "Board filter requires 'project'."
                 )
             project_id = await resolve_project(client, project)
             board_id = await resolve_board(client, project_id, board)
-            # Get all columns in this board and fetch tasks from each
             columns_data = await client.get_columns(board_id, None)
-            all_tasks: list[dict[str, Any]] = []
-            for col in columns_data:
-                if col.get("deleted", False):
-                    continue
-                tasks = await client.get_tasks(
-                    col["id"], None, title, effective_limit,
-                )
-                all_tasks.extend(tasks)
-            # Filter and enrich below
-            raw_tasks = all_tasks
-            column_id = None  # already fetched by column
+            active_cols = [c for c in columns_data if not c.get("deleted", False)]
+            task_lists = await asyncio.gather(*[
+                client.get_tasks(col["id"], None, title, effective_limit)
+                for col in active_cols
+            ])
+            raw_tasks: list[dict[str, Any]] = []
+            for task_list in task_lists:
+                raw_tasks.extend(task_list)
+            column_id = None
         elif project is not None:
             project_id = await resolve_project(client, project)
             boards_data = await client.get_boards(project_id, None)
-            all_tasks = []
-            for b in boards_data:
-                if b.get("deleted", False):
-                    continue
-                cols = await client.get_columns(b["id"], None)
-                for col in cols:
-                    if col.get("deleted", False):
-                        continue
-                    tasks = await client.get_tasks(
-                        col["id"], None, title, effective_limit,
-                    )
-                    all_tasks.extend(tasks)
-            raw_tasks = all_tasks
+            active_boards = [b for b in boards_data if not b.get("deleted", False)]
+            col_lists = await asyncio.gather(*[
+                client.get_columns(b["id"], None) for b in active_boards
+            ])
+            all_cols = []
+            for col_list in col_lists:
+                all_cols.extend(c for c in col_list if not c.get("deleted", False))
+            task_lists = await asyncio.gather(*[
+                client.get_tasks(col["id"], None, title, effective_limit)
+                for col in all_cols
+            ])
+            raw_tasks = []
+            for task_list in task_lists:
+                raw_tasks.extend(task_list)
             column_id = None
 
         if assigned_to is not None:
             assigned_user_id = await resolve_user(client, assigned_to)
 
         # If we haven't fetched tasks yet (simple column or assigned filter)
-        if column_id is not None or (
-            board is None and project is None
-        ):
+        if column_id is not None or (board is None and project is None):
             raw_tasks = await client.get_tasks(
                 column_id, assigned_user_id, title, effective_limit,
             )
@@ -491,16 +562,22 @@ def register(mcp: FastMCP, client: YougileClient) -> None:
             "tasks": enriched,
         }
 
-    @mcp.tool
+    @mcp.tool(
+        annotations={"readOnlyHint": True, "idempotentHint": True},
+        tags={"tasks", "read"},
+    )
     async def get_user_tasks(
-        user: str,
-        limit: int | None = None,
+        user: Annotated[
+            str, Field(description="User name or email")
+        ],
+        limit: Annotated[
+            int | None,
+            Field(description="Max results", ge=1, le=200),
+        ] = None,
     ) -> dict[str, Any]:
-        """Get all tasks assigned to a specific user, grouped by board and column.
+        """Get tasks assigned to a user, grouped by column.
 
-        Args:
-            user: User name or email.
-            limit: Maximum results (default 100).
+        Use instead of 'search_tasks' for a user overview.
         """
         user_id = await resolve_user(client, user)
         effective_limit = limit if limit is not None else 100
@@ -535,8 +612,6 @@ def register(mcp: FastMCP, client: YougileClient) -> None:
 
 def _parse_deadline(deadline_str: str) -> dict[str, Any]:
     """Parse ISO date string to Yougile deadline object."""
-    import datetime
-
     try:
         if "T" in deadline_str:
             dt = datetime.datetime.fromisoformat(deadline_str)

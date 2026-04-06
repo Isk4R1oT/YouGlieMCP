@@ -7,7 +7,8 @@ from yougile_mcp.tools import boards, chat, stickers, tasks, users, workspace
 
 SERVER_INSTRUCTIONS = """Yougile project management MCP server.
 
-IMPORTANT: All tools accept human-readable names (project names, board names, column names, user names/emails), NOT UUIDs.
+IMPORTANT: All tools accept human-readable names
+(project, board, column, user names/emails), NOT UUIDs.
 The server resolves names to IDs automatically.
 
 Tasks can be referenced by task code (e.g. 'PRJ-123') or UUID.
@@ -19,7 +20,8 @@ Workflow:
 4. Use 'add_task_comment' and 'get_task_comments' for task communication
 5. Use sticker tools to label tasks with custom categories
 
-If a name is not found, the error will list all available options so you can retry with the correct name.
+If a name is not found, the error will list available
+options so you can retry with the correct name.
 """
 
 mcp = FastMCP(
@@ -53,7 +55,8 @@ def setup() -> None:
 
     base = "https://ru.yougile.com/api-v2"
 
-    resp = httpx.post(f"{base}/auth/companies", json={"login": email, "password": password})
+    payload = {"login": email, "password": password}
+    resp = httpx.post(f"{base}/auth/companies", json=payload)
     if resp.status_code != 200:
         print(f"Authentication failed: {resp.status_code} {resp.text}")
         sys.exit(1)

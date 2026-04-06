@@ -1,7 +1,10 @@
+import logging
 from typing import Any
 
 from yougile_mcp.client import YougileClient
 from yougile_mcp.errors import ambiguous_error, empty_collection_error, not_found_error
+
+logger = logging.getLogger("yougile_mcp")
 
 
 def _match(items: list[dict[str, Any]], key: str, query: str) -> list[dict[str, Any]]:
@@ -142,12 +145,54 @@ async def resolve_users(
     client: YougileClient,
     user_identifiers: list[str],
 ) -> list[str]:
-    """Resolve multiple users by name or email to IDs."""
+    """Resolve multiple users by name or email to IDs. Fetches user list once."""
+    all_users = await client.get_users(None, None)
+    if not all_users:
+        raise empty_collection_error(
+            "user", "company", "your workspace",
+            "No users found in the company."
+        )
+
     result = []
     for identifier in user_identifiers:
-        user_id = await resolve_user(client, identifier)
-        result.append(user_id)
+        resolved = _resolve_single_user(all_users, identifier)
+        result.append(resolved)
     return result
+
+
+def _resolve_single_user(
+    all_users: list[dict[str, Any]],
+    user_identifier: str,
+) -> str:
+    """Match a single user identifier against a pre-fetched user list."""
+    email_matches = _match(all_users, "email", user_identifier)
+    if len(email_matches) == 1:
+        return email_matches[0]["id"]
+
+    name_matches = _match(all_users, "realName", user_identifier)
+    if len(name_matches) == 1:
+        return name_matches[0]["id"]
+
+    all_matches_ids = set()
+    all_matches = []
+    for m in email_matches + name_matches:
+        if m["id"] not in all_matches_ids:
+            all_matches_ids.add(m["id"])
+            all_matches.append(m)
+
+    if len(all_matches) == 0:
+        available = [
+            f"{u.get('realName', '?')} ({u.get('email', '?')})" for u in all_users
+        ]
+        raise not_found_error("User", user_identifier, available)
+
+    if len(all_matches) > 1:
+        names = [
+            f"{m.get('realName', '?')} ({m.get('email', '?')})" for m in all_matches
+        ]
+        raise ambiguous_error("user", user_identifier, names)
+
+    return all_matches[0]["id"]
 
 
 async def resolve_task(
@@ -238,8 +283,11 @@ async def enrich_task(
                 if project_id:
                     project = await client.get_project(project_id)
                     enriched["project_name"] = project.get("title", "")
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning(
+                "Failed to resolve location chain for task %s (column %s): %s",
+                task.get("id", "?"), column_id, exc,
+            )
 
     # Resolve assigned users
     assigned_ids = task.get("assigned", [])
@@ -330,7 +378,8 @@ async def enrich_task_summary(
             try:
                 column = await client.get_column(column_id)
                 column_name_cache[column_id] = column.get("title", "")
-            except Exception:
+            except Exception as exc:
+                logger.warning("Failed to resolve column %s: %s", column_id, exc)
                 column_name_cache[column_id] = column_id
         summary["column_name"] = column_name_cache[column_id]
 
